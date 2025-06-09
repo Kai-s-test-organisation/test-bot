@@ -13,7 +13,7 @@ import { WebClient } from '@slack/web-api';
 import dotenv from 'dotenv';
 
 dotenv.config();
-
+// Comment!
 // Types for Redis storage and internal use
 interface RedisStoredData {
     channel: string;
