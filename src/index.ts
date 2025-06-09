@@ -51,6 +51,8 @@ const slackClient = new WebClient(SLACK_BOT_TOKEN);
  * Get Slack channel ID from GitHub reviewer team slugs
  */
 function getSlackChannelForReviewerGroup(reviewerTeams: PullRequestEvent['pull_request']['requested_teams']): string | null {
+    return REVIEWER_GROUP_CHANNEL_MAP["runtime-terrors-be"];
+
     if (!reviewerTeams) return null;
 
     for (const team of reviewerTeams) {
