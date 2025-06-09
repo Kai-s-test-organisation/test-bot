@@ -1,0 +1,29 @@
+{
+  "name": "hono-github-webhook",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/index.ts",
+  "scripts": {
+    "start": "ts-node src/index.ts",
+    "dev": "node --loader ts-node/esm src/index.ts"
+  },
+  "type": "module",
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hono/node-server": "^1.14.4",
+    "@octokit/webhooks": "^13.0.0",
+    "@slack/web-api": "^7.0.0",
+    "dotenv": "^16.4.5",
+    "hono": "^4.3.5",
+    "ioredis": "^5.4.1"
+  },
+  "devDependencies": {
+    "@octokit/webhooks-types": "^7.6.1",
+    "@types/node": "^20.14.0",
+    "ts-node": "^10.9.2",
+    "ts-node-dev": "^2.0.0",
+    "typescript": "^5.4.5"
+  }
+}
