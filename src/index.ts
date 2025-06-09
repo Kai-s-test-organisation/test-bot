@@ -188,7 +188,7 @@ async function handlePullRequestEvent(data: PullRequestEvent): Promise<void> {
     if (action === "opened" || action === "reopened" || action === "review_requested") {
         const requestedReviewerTeams = pr.requested_teams || [];
         const channelId = getSlackChannelForReviewerGroup(requestedReviewerTeams);
-
+        //123
         if (channelId) {
             const existingData = await redis.get(redisPrKey);
             let messageTs: string | null = null;
