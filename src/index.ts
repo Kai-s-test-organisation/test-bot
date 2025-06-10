@@ -51,6 +51,8 @@ const slackClient = new WebClient(SLACK_BOT_TOKEN);
  * Get Slack channel ID from GitHub reviewer team slugs
  */
 function getSlackChannelForReviewerGroup(reviewerTeams: PullRequestEvent['pull_request']['requested_teams']): string | null {
+    return REVIEWER_GROUP_CHANNEL_MAP["runtime-terrors-be"];
+
     if (!reviewerTeams) return null;
 
     for (const team of reviewerTeams) {
@@ -66,7 +68,7 @@ function getSlackChannelForReviewerGroup(reviewerTeams: PullRequestEvent['pull_r
  * IMPORTANT: Replace with your actual team mappings
  */
 const GITHUB_TO_SLACK_USER_MAP: Record<string, string> = {
-    "kaiack": "U1234567890", // Replace with actual Slack User IDs
+    "kaiack": "U09049XGK3R", // Replace with actual Slack User IDs
     "githubuser2": "U0987654321",
     // Add all your team members here
 };
@@ -236,6 +238,7 @@ async function handlePullRequestEvent(data: PullRequestEvent): Promise<void> {
  * Handle pull request review events
  */
 async function handlePullRequestReviewEvent(data: PullRequestReviewSubmittedEvent): Promise<void> {
+    console.log("handling request review event")
     const prLink = data.pull_request.html_url;
     const reviewState = data.review.state;
     const reviewerGithub = data.review.user.login;
@@ -262,8 +265,11 @@ async function handlePullRequestReviewEvent(data: PullRequestReviewSubmittedEven
 /**
  * Handle issue comment events (comments on PRs)
  */
+
+// TODO: not sure if this ever occurs!
 async function handleIssueCommentEvent(data: IssueCommentCreatedEvent): Promise<void> {
     // Ensure it's a comment on a Pull Request
+    console.log("handling Issue comment event")
     if (data.issue?.pull_request) {
         const prLink = data.issue.pull_request.html_url;
         const commenterGithub = data.comment.user.login;
