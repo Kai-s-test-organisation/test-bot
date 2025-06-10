@@ -420,6 +420,20 @@ app.post('/github-webhook', async (c) => {
         } else {
             console.log(`Code comment for PR ${data.pull_request.html_url} not found in Redis map.`);
         }
+    }
+    // --- Handle Issue Comment Events (for general comments on PRs) ---
+    else if (eventType === "issue_comment" && data.issue && data.comment) {
+        if (data.issue.pull_request) { // Ensure it's a comment on a Pull Request
+            const existingDataRaw = await redis.get(redisPrKey);
+            if (existingDataRaw) {
+                const prInfo = parsePrInfo(existingDataRaw);
+                await addSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon");
+                console.log(`General comment on PR ${data.issue.pull_request.html_url}. Emoji added.`);
+                // No change to approvals/changesRequested, so no need to save prInfo back
+            } else {
+                console.log(`Comment for PR ${data.issue.pull_request.html_url} not found in Redis map.`);
+            }
+        }
     } else {
         console.log(`Unhandled GitHub event type: ${eventType}`);
     }
