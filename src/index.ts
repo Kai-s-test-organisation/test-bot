@@ -1,9 +1,15 @@
-import { Hono } from 'hono';
-import { serve } from '@hono/node-server';
-import { Webhooks } from '@octokit/webhooks';
-import {WebhookEvent, WebhookEventName, PullRequestEvent, PullRequestReviewEvent, PullRequestReviewCommentEvent} from "@octokit/webhooks-types";
+import {Hono} from 'hono';
+import {serve} from '@hono/node-server';
+import {Webhooks} from '@octokit/webhooks';
+import {
+    WebhookEvent,
+    WebhookEventName,
+    PullRequestEvent,
+    PullRequestReviewEvent,
+    PullRequestReviewCommentEvent
+} from "@octokit/webhooks-types";
 import Redis from 'ioredis';
-import { WebClient } from '@slack/web-api';
+import {WebClient} from '@slack/web-api';
 import dotenv from 'dotenv';
 
 // Load environment variables from .env file
@@ -40,7 +46,7 @@ const TWO_APPROVAL_REPOS = new Set(
 // --- Hono App and Clients Initialization ---
 const app = new Hono();
 const redis = new Redis(REDIS_URL);
-const webhooks = new Webhooks({ secret: GITHUB_WEBHOOK_SECRET });
+const webhooks = new Webhooks({secret: GITHUB_WEBHOOK_SECRET});
 const slackClient = new WebClient(SLACK_BOT_TOKEN);
 
 // --- Type Definition for Redis Stored Data (Minimum for Status Tracking) ---
@@ -164,50 +170,72 @@ async function postPrNotification(
 }
 
 /**
- * Adds an emoji reaction to a Slack message.
- * @param channelId The Slack channel ID of the message.
- * @param timestamp The timestamp (ts) of the Slack message.
- * @param reactionEmoji The name of the emoji (e.g., 'white_check_mark', 'speech_balloon').
+ * Adds an emoji reaction to a Slack message, updating Redis state.
+ * @param prInfo The PR Slack message info object.
+ * @param reactionEmoji The name of the emoji (e.g., 'white_check_mark').
+ * @param redisKey The Redis key for the PR info.
  */
-async function addSlackReaction(channelId: string, timestamp: string, reactionEmoji: string) {
+async function addSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji: string, redisKey: string) {
+    if (prInfo.botReactions.has(reactionEmoji)) {
+        // console.log(`Reaction :${reactionEmoji}: already recorded in Redis for message ${prInfo.ts}. Skipping Slack API call.`);
+        return; // Already has this reaction, no need to call Slack API
+    }
+
     try {
         await slackClient.reactions.add({
-            channel: channelId,
-            timestamp: timestamp,
+            channel: prInfo.channel,
+            timestamp: prInfo.ts,
             name: reactionEmoji,
         });
-        console.log(`Added :${reactionEmoji}: reaction to message ${timestamp} in channel ${channelId}.`);
+        prInfo.botReactions.add(reactionEmoji); // Add to our local set
+        await redis.set(redisKey, JSON.stringify(preparePrInfoForStorage(prInfo))); // Store updated state
+        console.log(`Added :${reactionEmoji}: reaction to message ${prInfo.ts} in channel ${prInfo.channel} and updated Redis.`);
     } catch (error: any) {
         if (error.data && error.data.error === 'already_reacted') {
-            // This is common and not an error we need to log as an error
-            // console.log(`Reaction :${reactionEmoji}: already exists on message ${timestamp}.`);
+            // Slack API reported it's already there, so sync Redis if it's not
+            if (!prInfo.botReactions.has(reactionEmoji)) {
+                prInfo.botReactions.add(reactionEmoji);
+                await redis.set(redisKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
+                console.log(`Slack reported 'already_reacted' for :${reactionEmoji}: on message ${prInfo.ts}. Redis state synchronized.`);
+            }
         } else {
-            console.error(`Error adding reaction :${reactionEmoji}: to message ${timestamp}:`, error.message);
+            console.error(`Error adding reaction :${reactionEmoji}: to message ${prInfo.ts}:`, error.message);
             if (error.data) console.error("Slack API Error Data:", error.data);
         }
     }
 }
 
 /**
- * Removes an emoji reaction from a Slack message.
- * @param channelId The Slack channel ID of the message.
- * @param timestamp The timestamp (ts) of the Slack message.
+ * Removes an emoji reaction from a Slack message, updating Redis state.
+ * @param prInfo The PR Slack message info object.
  * @param reactionEmoji The name of the emoji.
+ * @param redisKey The Redis key for the PR info.
  */
-async function removeSlackReaction(channelId: string, timestamp: string, reactionEmoji: string) {
+async function removeSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji: string, redisKey: string) {
+    if (!prInfo.botReactions.has(reactionEmoji)) {
+        // console.log(`Reaction :${reactionEmoji}: not recorded in Redis for message ${prInfo.ts}. Skipping Slack API call.`);
+        return; // Doesn't have this reaction, no need to call Slack API
+    }
+
     try {
         await slackClient.reactions.remove({
-            channel: channelId,
-            timestamp: timestamp,
+            channel: prInfo.channel,
+            timestamp: prInfo.ts,
             name: reactionEmoji,
         });
-        console.log(`Removed :${reactionEmoji}: reaction from message ${timestamp} in channel ${channelId}.`);
+        prInfo.botReactions.delete(reactionEmoji); // Remove from our local set
+        await redis.set(redisKey, JSON.stringify(preparePrInfoForStorage(prInfo))); // Store updated state
+        console.log(`Removed :${reactionEmoji}: reaction from message ${prInfo.ts} in channel ${prInfo.channel} and updated Redis.`);
     } catch (error: any) {
-        // 'not_reacted' is common if we try to remove a reaction that's not there
         if (error.data && error.data.error === 'not_reacted') {
-            // console.log(`Reaction :${reactionEmoji}: does not exist on message ${timestamp} to remove.`);
+            // Slack API reported it's not there, so sync Redis if it is
+            if (prInfo.botReactions.has(reactionEmoji)) {
+                prInfo.botReactions.delete(reactionEmoji);
+                await redis.set(redisKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
+                console.log(`Slack reported 'not_reacted' for :${reactionEmoji}: on message ${prInfo.ts}. Redis state synchronized.`);
+            }
         } else {
-            console.error(`Error removing reaction :${reactionEmoji}: from message ${timestamp}:`, error.message);
+            console.error(`Error removing reaction :${reactionEmoji}: from message ${prInfo.ts}:`, error.message);
             if (error.data) console.error("Slack API Error Data:", error.data);
         }
     }
@@ -246,7 +274,7 @@ app.post('/github-webhook', async (c) => {
 
     if (!signature || !eventType || !payload) {
         console.warn("Received webhook with missing headers or payload.");
-        return c.json({ message: 'Missing headers or payload' }, 400);
+        return c.json({message: 'Missing headers or payload'}, 400);
     }
 
     try {
@@ -254,17 +282,22 @@ app.post('/github-webhook', async (c) => {
         const isValid = await webhooks.verify(payload, signature);
         if (!isValid) {
             console.error(`Webhook signature verification failed for event ${eventType}`);
-            return c.json({ message: 'Invalid signature' }, 401);
+            return c.json({message: 'Invalid signature'}, 401);
         }
         console.log(`Webhook received for event: ${eventType}`);
     } catch (error) {
         console.error(`Webhook signature verification failed for event ${eventType}:`, error);
-        return c.json({ message: 'Invalid signature' }, 401);
+        return c.json({message: 'Invalid signature'}, 401);
     }
 
     const parsed_data = JSON.parse(payload) as WebhookEvent;
 
-    const getPrMetaData = (data : PullRequestEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent) : {prNumber:number, repoId:number, repoFullName:string, redisPrKey:string } => {
+    const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent): {
+        prNumber: number,
+        repoId: number,
+        repoFullName: string,
+        redisPrKey: string
+    } => {
         return {
             prNumber: data.pull_request.number,
             repoId: data.repository.id,
@@ -320,9 +353,9 @@ app.post('/github-webhook', async (c) => {
                 prInfo.changesRequested.clear();
 
                 // Remove approval/ready-to-merge reactions
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "white_check_mark");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "rocket");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "warning"); // Remove warning if it was there
+                await removeSlackReaction(prInfo, "white_check_mark", redisPrKey);
+                await removeSlackReaction(prInfo, "rocket", redisPrKey);
+                await removeSlackReaction(prInfo, "warning", redisPrKey);
 
                 await redis.set(redisPrKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
                 console.log(`PR ${prPayload.html_url} synchronized. Approvals/Reviews reset.`);
@@ -336,11 +369,11 @@ app.post('/github-webhook', async (c) => {
             if (existingDataRaw) {
                 const prInfo = parsePrInfo(existingDataRaw);
 
-                await addSlackReaction(prInfo.channel, prInfo.ts, "white_check_mark"); // Final green tick
-                await addSlackReaction(prInfo.channel, prInfo.ts, "merged"); // Custom merged emoji
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "rocket");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "warning"); // In case it was changes requested
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon"); // In case it had comments
+                await addSlackReaction(prInfo, "white_check_mark", redisPrKey); // Final green tick
+                await addSlackReaction(prInfo, "merged", redisPrKey); // Custom merged emoji
+                await removeSlackReaction(prInfo, "rocket", redisPrKey);
+                await removeSlackReaction(prInfo, "warning", redisPrKey);
+                await removeSlackReaction(prInfo, "speech_balloon", redisPrKey);
 
                 await redis.del(redisPrKey); // PR is merged, remove from Redis tracking
                 console.log(`PR ${prPayload.html_url} merged. Status reflected with emojis.`);
@@ -354,17 +387,30 @@ app.post('/github-webhook', async (c) => {
             if (existingDataRaw) {
                 const prInfo = parsePrInfo(existingDataRaw);
 
-                await addSlackReaction(prInfo.channel, prInfo.ts, "x"); // Indicate closed without merge
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "white_check_mark");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "rocket");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "warning");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon");
+                await addSlackReaction(prInfo, "x", redisPrKey); // Indicate closed without merge
+                await removeSlackReaction(prInfo, "white_check_mark", redisPrKey);
+                await removeSlackReaction(prInfo, "rocket", redisPrKey);
+                await removeSlackReaction(prInfo, "warning", redisPrKey);
+                await removeSlackReaction(prInfo, "speech_balloon", redisPrKey);
 
                 await redis.del(redisPrKey); // PR is closed, remove from Redis tracking
                 console.log(`PR ${prPayload.html_url} closed (unmerged). Status reflected with emojis.`);
             } else {
                 console.log(`Closed (unmerged) PR ${prPayload.html_url} not found in Redis map.`);
             }
+        }
+    } else if (eventType === "pull_request_review_comment") {
+        const data = parsed_data as PullRequestReviewEvent;
+        const {redisPrKey, prNumber, repoId, repoFullName} = getPrMetaData(data);
+        // These are inline comments in code review. A general comment emoji might be sufficient.
+        const existingDataRaw = await redis.get(redisPrKey);
+        if (existingDataRaw) {
+            const prInfo = parsePrInfo(existingDataRaw);
+            await addSlackReaction(prInfo, "speech_balloon", redisPrKey);
+            console.log(`Code comment on PR ${data.pull_request.html_url}. Emoji added.`);
+            // No change to approvals/changesRequested, so no need to save prInfo back
+        } else {
+            console.log(`Code comment for PR ${data.pull_request.html_url} not found in Redis map.`);
         }
     }
     // --- Handle Pull Request Review Events (formal reviews) ---
@@ -382,15 +428,15 @@ app.post('/github-webhook', async (c) => {
                 prInfo.changesRequested.delete(reviewerGithub); // Remove from changes requested if they previously requested changes
                 prInfo.approvals.add(reviewerGithub);
 
-                await addSlackReaction(prInfo.channel, prInfo.ts, "white_check_mark");
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon"); // Remove comment reaction if previously added
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "warning"); // Remove warning if previously changes requested
+                await addSlackReaction(prInfo, "white_check_mark", redisPrKey);
+                await removeSlackReaction(prInfo, "speech_balloon", redisPrKey); // Remove comment reaction if previously added
+                await removeSlackReaction(prInfo, "warning", redisPrKey); // Remove warning if previously changes requested
 
                 if (isPrReadyToMerge(prInfo.repoFullName, prInfo.approvals, prInfo.changesRequested)) {
-                    await addSlackReaction(prInfo.channel, prInfo.ts, "rocket");
+                    await addSlackReaction(prInfo, "rocket", redisPrKey);
                 } else if (prInfo.approvals.size > 0 && !isPrReadyToMerge(prInfo.repoFullName, prInfo.approvals, prInfo.changesRequested)) {
                     // If approved but not enough approvals yet, keep a pending reaction if desired
-                    // await addSlackReaction(prInfo.channel, prInfo.ts, "hourglass_flowing_sand");
+                    // await addSlackReaction(prInfo, "hourglass_flowing_sand");
                 }
 
                 console.log(`PR ${data.pull_request.html_url} approved by ${reviewerGithub}. Emojis updated.`);
@@ -398,18 +444,21 @@ app.post('/github-webhook', async (c) => {
                 prInfo.approvals.delete(reviewerGithub); // Remove from approvals if they previously approved
                 prInfo.changesRequested.add(reviewerGithub);
 
-                await addSlackReaction(prInfo.channel, prInfo.ts, "warning"); // Or a specific 'changes_requested' emoji
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "rocket"); // Remove ready-to-merge indicator
-                await removeSlackReaction(prInfo.channel, prInfo.ts, "white_check_mark"); // Remove approval if now changes requested
-                // await removeSlackReaction(prInfo.channel, prInfo.ts, "hourglass_flowing_sand");
+                await addSlackReaction(prInfo, "warning", redisPrKey); // Or a specific 'changes_requested' emoji
+                await removeSlackReaction(prInfo, "rocket", redisPrKey); // Remove ready-to-merge indicator
+                await removeSlackReaction(prInfo, "white_check_mark", redisPrKey); // Remove approval if now changes requested
+                // await removeSlackReaction(prInfo, "hourglass_flowing_sand");
 
                 console.log(`PR ${data.pull_request.html_url} changes requested by ${reviewerGithub}. Emojis updated.`);
-            } else if (reviewState === "commented") {
-                // This refers to a general review comment, not a specific "commented" state
-                // We can add a simple comment emoji if desired
-                await addSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon");
-                console.log(`PR ${data.pull_request.html_url} commented on by ${reviewerGithub}. Emoji added.`);
             }
+
+            // TODO: This also triggers the pull_request_review_commented event, no need to duplicate.
+            // else if (reviewState === "commented") {
+            //     // This refers to a general review comment, not a specific "commented" state
+            //     // We can add a simple comment emoji if desired
+            //     await addSlackReaction(prInfo, "speech_balloon", redisPrKey);
+            //     console.log(`PR ${data.pull_request.html_url} commented on by ${reviewerGithub}. Emoji added.`);
+            // }
 
             await redis.set(redisPrKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
         } else {
@@ -417,24 +466,11 @@ app.post('/github-webhook', async (c) => {
         }
     }
     // --- Handle Pull Request Review Comment Events (code review comments) ---
-    else if (eventType === "pull_request_review_comment") {
-        const data = parsed_data as PullRequestReviewEvent;
-        const {redisPrKey, prNumber, repoId, repoFullName} = getPrMetaData(data);
-        // These are inline comments in code review. A general comment emoji might be sufficient.
-        const existingDataRaw = await redis.get(redisPrKey);
-        if (existingDataRaw) {
-            const prInfo = parsePrInfo(existingDataRaw);
-            await addSlackReaction(prInfo.channel, prInfo.ts, "speech_balloon");
-            console.log(`Code comment on PR ${data.pull_request.html_url}. Emoji added.`);
-            // No change to approvals/changesRequested, so no need to save prInfo back
-        } else {
-            console.log(`Code comment for PR ${data.pull_request.html_url} not found in Redis map.`);
-        }
-    } else {
+    else {
         console.log(`Unhandled GitHub event type: ${eventType}`);
     }
 
-    return c.json({ message: 'Webhook received and processed' });
+    return c.json({message: 'Webhook received and processed'});
 });
 
 // --- Start Server ---
