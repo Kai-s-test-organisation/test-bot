@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { serve } from '@hono/node-server';
 import { Webhooks } from '@octokit/webhooks';
+import {WebhookEvent, WebhookEventName, PullRequestEvent, PullRequestReviewEvent, PullRequestReviewCommentEvent} from "@octokit/webhooks-types";
 import Redis from 'ioredis';
 import { WebClient } from '@slack/web-api';
 import dotenv from 'dotenv';
@@ -14,6 +15,7 @@ const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN;
 const REDIS_URL = process.env.REDIS_URL;
 const REVIEWER_GROUP_CHANNEL_MAP_RAW = process.env.REVIEWER_GROUP_CHANNEL_MAP || '{}';
 const GITHUB_TO_SLACK_USER_MAP_RAW = process.env.GITHUB_TO_SLACK_USER_MAP || '{}';
+const TWO_APPROVAL_REPOS_RAW = process.env.TWO_APPROVAL_REPOS_LIST || '';
 const PORT = parseInt(process.env.PORT || '3000', 10);
 
 // Validate essential environment variables
@@ -26,12 +28,14 @@ if (!GITHUB_WEBHOOK_SECRET || !SLACK_BOT_TOKEN || !REDIS_URL) {
 const REVIEWER_GROUP_CHANNEL_MAP: { [key: string]: string } = JSON.parse(REVIEWER_GROUP_CHANNEL_MAP_RAW);
 const GITHUB_TO_SLACK_USER_MAP: { [key: string]: string } = JSON.parse(GITHUB_TO_SLACK_USER_MAP_RAW);
 
-// --- Hard-coded configuration for repos requiring two approvals ---
-const TWO_APPROVAL_REPOS = new Set([
-    'your-org/critical-repo',  // Replace with actual repo names in format 'owner/repo'
-    'your-org/production-app',
-    // Add more repos that require 2 approvals
-]);
+// Parse the comma-separated string into a Set for efficient lookups
+const TWO_APPROVAL_REPOS = new Set(
+    TWO_APPROVAL_REPOS_RAW
+        .split(',')              // Split the string into an array
+        .map(repo => repo.trim()) // Trim any whitespace from each repo name
+        .filter(Boolean)         // Remove any empty strings that might result from trailing commas
+);
+
 
 // --- Hono App and Clients Initialization ---
 const app = new Hono();
@@ -46,6 +50,7 @@ interface PrSlackMessageInfo {
     repoFullName: string; // Still needed for TWO_APPROVAL_REPOS check
     approvals: Set<string>; // Track who has approved (GitHub usernames)
     changesRequested: Set<string>; // Track who requested changes
+    botReactions: Set<string>; // New: Track reactions added by the bot
 }
 
 // --- Helper Functions ---
@@ -97,7 +102,6 @@ function isPrReadyToMerge(repoFullName: string, approvals: Set<string>, changesR
  * @param prLink The URL of the PR.
  * @param prTitle The title of the PR.
  * @param prCreatorGithub The GitHub username of the PR creator.
- * @param requestedReviewersGithub An array of GitHub user objects.
  * @param prNumber The PR number.
  * @param repoId The repository ID.
  * @param repoFullName The full repository name (owner/repo).
@@ -116,9 +120,6 @@ async function postPrNotification(
     const creatorMention = getSlackUserId(prCreatorGithub)
         ? `<@${getSlackUserId(prCreatorGithub)}>`
         : `*${prCreatorGithub}*`;
-
-
-
 
 
     // Start with a clear header
@@ -147,7 +148,8 @@ async function postPrNotification(
                 ts: response.ts,
                 repoFullName: repoFullName,
                 approvals: new Set(),
-                changesRequested: new Set()
+                changesRequested: new Set(),
+                botReactions: new Set()
             };
 
             await redis.set(`pr:${repoId}:${prNumber}`, JSON.stringify(preparePrInfoForStorage(prInfo)));
@@ -219,7 +221,8 @@ function parsePrInfo(storedData: string): PrSlackMessageInfo {
     return {
         ...parsed,
         approvals: new Set(parsed.approvals || []),
-        changesRequested: new Set(parsed.changesRequested || [])
+        changesRequested: new Set(parsed.changesRequested || []),
+        botReactions: new Set(parsed.botReactions || []) // Handle new property
     };
 }
 
@@ -230,14 +233,15 @@ function preparePrInfoForStorage(prInfo: PrSlackMessageInfo): any {
     return {
         ...prInfo,
         approvals: Array.from(prInfo.approvals),
-        changesRequested: Array.from(prInfo.changesRequested)
+        changesRequested: Array.from(prInfo.changesRequested),
+        botReactions: Array.from(prInfo.botReactions) // Handle new property
     };
 }
 
 // --- Hono Route for GitHub Webhooks ---
 app.post('/github-webhook', async (c) => {
     const signature = c.req.header('X-Hub-Signature-256');
-    const eventType = c.req.header('X-GitHub-Event');
+    const eventType = c.req.header('X-GitHub-Event') as WebhookEventName;
     const payload = await c.req.text(); // Get raw body for signature verification
 
     if (!signature || !eventType || !payload) {
@@ -258,31 +262,29 @@ app.post('/github-webhook', async (c) => {
         return c.json({ message: 'Invalid signature' }, 401);
     }
 
-    const data = JSON.parse(payload);
+    const parsed_data = JSON.parse(payload) as WebhookEvent;
 
-    // Common PR identification from payload
-    let prDetailsFromEvent: any = null; // This will hold the 'pull_request' or 'issue' object that contains PR info
-    if (data.pull_request) { // For 'pull_request' and 'pull_request_review' events
-        prDetailsFromEvent = data.pull_request;
-    } else if (data.issue?.pull_request) { // For 'issue_comment' on a PR
-        prDetailsFromEvent = data.issue;
-    }
-
-    const prNumber = prDetailsFromEvent ? prDetailsFromEvent.number : null;
-    const repoId = data.repository ? data.repository.id : null;
-    const repoFullName = data.repository ? data.repository.full_name : null;
-    const redisPrKey = prNumber && repoId ? `pr:${repoId}:${prNumber}` : null;
-
-    if (!redisPrKey || !repoFullName || !prDetailsFromEvent) {
-        console.warn(`Could not form a valid Redis key, get repo name, or missing prDetailsFromEvent for incoming event: ${eventType}. Skipping.`);
-        return c.json({ message: 'Invalid PR data for key generation or update' }, 400);
+    const getPrMetaData = (data : PullRequestEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent) : {prNumber:number, repoId:number, repoFullName:string, redisPrKey:string } => {
+        return {
+            prNumber: data.pull_request.number,
+            repoId: data.repository.id,
+            repoFullName: data.repository.full_name,
+            redisPrKey: `pr:${data.repository.id}:${data.pull_request.number}`,
+        }
     }
 
     // --- Handle Pull Request Events ---
-    if (eventType === "pull_request" && data.pull_request) {
+    if (eventType === "pull_request") {
+        // TODO: Put this block of code into a function. same for other switch statements.
+        const data = parsed_data as PullRequestEvent;
         const action = data.action;
         const prPayload = data.pull_request; // Direct reference for brevity here
 
+        const {redisPrKey, prNumber, repoId, repoFullName} = getPrMetaData(data);
+        // TODO: can be improved or just removed when this gets moved to a function
+        // Just have util function to make redisPRKey, the rest can be accessed directly from data.
+
+        // TODO: check if we want reopened to even be here.
         if (action === "opened" || action === "reopened" || action === "review_requested") {
             const requestedReviewerTeams = prPayload.requested_teams || [];
             const requestedReviewersUsers = prPayload.requested_reviewers || [];
@@ -366,9 +368,11 @@ app.post('/github-webhook', async (c) => {
         }
     }
     // --- Handle Pull Request Review Events (formal reviews) ---
-    else if (eventType === "pull_request_review" && data.pull_request && data.review) {
+    else if (eventType === "pull_request_review") {
+        const data = parsed_data as PullRequestReviewEvent;
         const reviewState = data.review.state; // 'approved', 'changes_requested', 'commented'
         const reviewerGithub = data.review.user.login;
+        const {redisPrKey, prNumber, repoId, repoFullName} = getPrMetaData(data);
 
         const existingDataRaw = await redis.get(redisPrKey);
         if (existingDataRaw) {
@@ -413,7 +417,9 @@ app.post('/github-webhook', async (c) => {
         }
     }
     // --- Handle Pull Request Review Comment Events (code review comments) ---
-    else if (eventType === "pull_request_review_comment" && data.pull_request && data.comment) {
+    else if (eventType === "pull_request_review_comment") {
+        const data = parsed_data as PullRequestReviewEvent;
+        const {redisPrKey, prNumber, repoId, repoFullName} = getPrMetaData(data);
         // These are inline comments in code review. A general comment emoji might be sufficient.
         const existingDataRaw = await redis.get(redisPrKey);
         if (existingDataRaw) {
