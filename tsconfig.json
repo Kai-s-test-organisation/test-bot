@@ -1,9 +1,27 @@
+//{
+//  "compilerOptions": {
+//    "module": "ESNext",
+//    "moduleResolution": "Node",
+//    "target": "ES2020",
+//    "esModuleInterop": true,
+//    "allowSyntheticDefaultImports": true
+//  }
+//}
 {
   "compilerOptions": {
+    "target": "ES2022",
     "module": "ESNext",
-    "moduleResolution": "Node",
-    "target": "ES2020",
+    "moduleResolution": "node",
+    "allowSyntheticDefaultImports": true,
     "esModuleInterop": true,
-    "allowSyntheticDefaultImports": true
-  }
+    "allowJs": true,
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "strict": true,
+    "declaration": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist"]
 }
