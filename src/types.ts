@@ -1,28 +1,9 @@
-// === src/types.ts ===
+// Type for Redis Stored Data
 export interface PrSlackMessageInfo {
     channel: string;
     ts: string;
-    prLink: string;
-    prTitle: string;
-    prCreatorGithub: string;
-    repoFullName: string;
-    requestedReviewersGithub: { login: string }[];
-    activities: string[];
-    currentStatus: string;
-    approvals: Set<string>;
-    changesRequested: Set<string>;
-}
-
-export interface StoredPrInfo {
-    channel: string;
-    ts: string;
-    prLink: string;
-    prTitle: string;
-    prCreatorGithub: string;
-    repoFullName: string;
-    requestedReviewersGithub: { login: string }[];
-    activities: string[];
-    currentStatus: string;
-    approvals: string[];
-    changesRequested: string[];
+    repoFullName: string; // needed for TWO_APPROVAL_REPOS check
+    approvals: Set<string>; // Track who has approved
+    changesRequested: Set<string>; // Track who requested changes
+    botReactions: Set<string>; // Track current reactions on the message
 }

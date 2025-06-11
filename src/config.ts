@@ -29,3 +29,12 @@ export const TWO_APPROVAL_REPOS = new Set(
         .map(repo => repo.trim()) // Trim any whitespace from each repo name
         .filter(Boolean)         // Remove any empty strings that might result from trailing commas
 );
+
+// Emoji constants
+export const MERGED = "merged"
+export const APPROVED = "white_check_mark"
+export const CLOSED = "x"
+export const COMMENTED = "speech_balloon"
+export const READY_TO_MERGE = "rocket"
+export const PARTIAL_APPROVAL = "one"
+export const NEEDS_REVIEW = "warning"
