@@ -51,6 +51,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
             prInfo.approvals.clear();
             prInfo.changesRequested.clear();
 
+
             // Remove approval/ready-to-merge reactions
             await removeSlackReaction(prInfo, APPROVED, redisPrKey);
             await removeSlackReaction(prInfo, READY_TO_MERGE, redisPrKey);
