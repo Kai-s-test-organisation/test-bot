@@ -4,9 +4,11 @@ import {
     THREE_DAYS_IN_SECONDS,
     TWO_APPROVAL_REPOS
 } from "./config.js";
-import {PrSlackMessageInfo} from "./types.js";
+import {PrSlackMessageInfo, SlackSlashCommandPayload} from "./types.js";
 import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent} from "@octokit/webhooks-types";
 import { redis } from "./index.js";
+import { createHmac, timingSafeEqual } from 'crypto'
+import type { Context, Next, MiddlewareHandler } from 'hono'
 
 /**
  * Finds the Slack channel ID for a given GitHub reviewer group.
@@ -94,4 +96,59 @@ export const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentE
 
 export function setPrMessageInfo(redisPrKey:string, prInfo: PrSlackMessageInfo): any {
     redis.setex(redisPrKey, THREE_DAYS_IN_SECONDS, JSON.stringify(preparePrInfoForStorage(prInfo)));
+}
+
+
+
+
+// Slack signature verification middleware
+export const verifySlackSignature = (signingSecret: string): MiddlewareHandler => {
+    return async (c: Context, next: Next) => {
+        const signature = c.req.header('x-slack-signature')
+        const timestamp = c.req.header('x-slack-request-timestamp')
+        const body = await c.req.text()
+
+        // Check if signature and timestamp are present
+        if (!signature || !timestamp) {
+            return c.json({ error: 'Missing signature or timestamp' }, 401)
+        }
+
+        // Check if request is too old (prevent replay attacks)
+        const currentTime = Math.floor(Date.now() / 1000)
+        if (Math.abs(currentTime - parseInt(timestamp)) > 300) { // 5 minutes
+            return c.json({ error: 'Request too old' }, 401)
+        }
+
+        // Slack's signature format: v0:{timestamp}:{body}
+        const sigBaseString = `v0:${timestamp}:${body}`
+
+        // Create HMAC hash
+        const hmac = createHmac('sha256', signingSecret)
+        hmac.update(sigBaseString)
+        const computedSignature = `v0=${hmac.digest('hex')}`
+
+        // Compare signatures using timing-safe comparison
+        const sigBuffer = Buffer.from(signature)
+        const computedBuffer = Buffer.from(computedSignature)
+
+        if (sigBuffer.length !== computedBuffer.length ||
+            !timingSafeEqual(sigBuffer, computedBuffer)) {
+            return c.json({ error: 'Invalid signature' }, 401)
+        }
+
+        // Store the parsed body for later use
+        c.set('slackBody', body)
+
+        await next()
+    }
+}
+
+// Helper function to parse only the fields we need
+export const parseSlackBody = (body: string): Partial<SlackSlashCommandPayload> => {
+    const params = new URLSearchParams(body)
+    return {
+        user_id: params.get('user_id') || undefined,
+        channel_id: params.get('channel_id') || undefined,
+        text: params.get('text') || undefined,
+    }
 }

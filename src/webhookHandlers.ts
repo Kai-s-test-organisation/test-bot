@@ -4,7 +4,7 @@ import {
     getSlackChannelForReviewerGroup,
     isPrReadyToMerge,
     parsePrInfo,
-    preparePrInfoForStorage, setPrMessageInfo
+    setPrMessageInfo
 } from "./utils.js";
 import {addSlackReaction, postPrNotification, removeSlackReaction} from "./slack.js";
 import {APPROVED, CLOSED, COMMENTED, MERGED, NEEDS_REVIEW, PARTIAL_APPROVAL, READY_TO_MERGE} from "./config.js";
@@ -56,6 +56,9 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, APPROVED, redisPrKey);
             await removeSlackReaction(prInfo, READY_TO_MERGE, redisPrKey);
             await removeSlackReaction(prInfo, NEEDS_REVIEW, redisPrKey);
+
+            // TODO: Maybe add emoji to signify that needs a recheck?
+            // Usually in this case the person just @'s the original reviewer anyways...
 
             await setPrMessageInfo(redisPrKey, prInfo);
             console.log(`PR ${prPayload.html_url} synchronized. Approvals/Reviews reset.`);

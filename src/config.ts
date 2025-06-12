@@ -5,6 +5,7 @@ dotenv.config();
 
 // --- Configuration from Environment Variables ---
 export const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET!;
+export const SLACK_WEBHOOK_SECRET = process.env.SLACK_WEBHOOK_SECRET!;
 export const SLACK_BOT_TOKEN = process.env.SLACK_BOT_TOKEN!;
 export const REDIS_URL = process.env.REDIS_URL!;
 const REVIEWER_GROUP_CHANNEL_MAP_RAW = process.env.REVIEWER_GROUP_CHANNEL_MAP || '{}';
