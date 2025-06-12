@@ -4,7 +4,7 @@ import {
     getSlackChannelForReviewerGroup,
     isPrReadyToMerge,
     parsePrInfo,
-    preparePrInfoForStorage
+    preparePrInfoForStorage, setPrMessageInfo
 } from "./utils.js";
 import {addSlackReaction, postPrNotification, removeSlackReaction} from "./slack.js";
 import {APPROVED, CLOSED, COMMENTED, MERGED, NEEDS_REVIEW, PARTIAL_APPROVAL, READY_TO_MERGE} from "./config.js";
@@ -14,7 +14,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
     const action = data.action;
     const prPayload = data.pull_request; // Direct reference for brevity here
 
-    const {prNumber, repoId, repoFullName, redisPrKey} = getPrMetaData(data);
+    const {prNumber, repoFullName, redisPrKey} = getPrMetaData(data);
 
     // TODO: change this to just review requested in the future.
     if (action === "opened" || action === "review_requested") {
@@ -32,7 +32,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
                     prPayload.title,
                     prPayload.user.login,
                     prNumber!,
-                    repoId!,
+                    redisPrKey,
                     repoFullName!
                 );
             }
@@ -56,7 +56,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, READY_TO_MERGE, redisPrKey);
             await removeSlackReaction(prInfo, NEEDS_REVIEW, redisPrKey);
 
-            await redis.set(redisPrKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
+            await setPrMessageInfo(redisPrKey, prInfo);
             console.log(`PR ${prPayload.html_url} synchronized. Approvals/Reviews reset.`);
         } else {
             console.log(`Synchronized PR ${prPayload.html_url} not found in Redis map.`);
@@ -155,5 +155,5 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
         console.log(`PR ${data.pull_request.html_url} changes requested by ${reviewerGithub}. Slack message updated.`);
     }
 
-    await redis.set(redisPrKey, JSON.stringify(preparePrInfoForStorage(prInfo)));
+    await setPrMessageInfo(redisPrKey, prInfo);
 }

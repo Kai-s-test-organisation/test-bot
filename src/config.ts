@@ -38,3 +38,6 @@ export const COMMENTED = "speech_balloon"
 export const READY_TO_MERGE = "rocket"
 export const PARTIAL_APPROVAL = "one"
 export const NEEDS_REVIEW = "warning"
+
+// Other constants
+export const THREE_DAYS_IN_SECONDS = 259200

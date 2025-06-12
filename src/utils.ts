@@ -1,6 +1,12 @@
-import {GITHUB_TO_SLACK_USER_MAP, REVIEWER_GROUP_CHANNEL_MAP, TWO_APPROVAL_REPOS} from "./config.js";
+import {
+    GITHUB_TO_SLACK_USER_MAP,
+    REVIEWER_GROUP_CHANNEL_MAP,
+    THREE_DAYS_IN_SECONDS,
+    TWO_APPROVAL_REPOS
+} from "./config.js";
 import {PrSlackMessageInfo} from "./types.js";
 import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent} from "@octokit/webhooks-types";
+import { redis } from "./index.js";
 
 /**
  * Finds the Slack channel ID for a given GitHub reviewer group.
@@ -8,7 +14,7 @@ import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent}
  * @returns The Slack channel ID or null if no mapping is found.
  */
 export function getSlackChannelForReviewerGroup(reviewerGroups: any[]): string | null {
-    return "C0904A41ABH"
+    // return "C0904A41ABH"
     for (const group of reviewerGroups) {
         if (group.slug && REVIEWER_GROUP_CHANNEL_MAP[group.slug]) {
             return REVIEWER_GROUP_CHANNEL_MAP[group.slug];
@@ -68,6 +74,10 @@ export function preparePrInfoForStorage(prInfo: PrSlackMessageInfo): any {
     };
 }
 
+/**
+ * Get some common useful information from the PR events.
+ * @param data
+ */
 export const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentEvent | PullRequestReviewEvent): {
     prNumber: number,
     repoId: number,
@@ -80,4 +90,8 @@ export const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentE
         repoFullName: data.repository.full_name,
         redisPrKey: `pr:${data.repository.id}:${data.pull_request.number}`,
     }
+}
+
+export function setPrMessageInfo(redisPrKey:string, prInfo: PrSlackMessageInfo): any {
+    redis.setex(redisPrKey, THREE_DAYS_IN_SECONDS, JSON.stringify(preparePrInfoForStorage(prInfo)));
 }
