@@ -1,14 +1,13 @@
+import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent} from "@octokit/webhooks-types";
+import { createHmac, timingSafeEqual } from 'crypto'
+import type { Context, Next, MiddlewareHandler } from 'hono'
 import {
     GITHUB_TO_SLACK_USER_MAP,
     REVIEWER_GROUP_CHANNEL_MAP,
     THREE_DAYS_IN_SECONDS,
     TWO_APPROVAL_REPOS
 } from "./config.js";
-import {PrSlackMessageInfo, SlackSlashCommandPayload} from "./types.js";
-import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent} from "@octokit/webhooks-types";
-import { redis } from "./index.js";
-import { createHmac, timingSafeEqual } from 'crypto'
-import type { Context, Next, MiddlewareHandler } from 'hono'
+import {SlackSlashCommandPayload} from "./types.js";
 
 /**
  * Finds the Slack channel ID for a given GitHub reviewer group.
@@ -51,31 +50,6 @@ export function isPrReadyToMerge(repoFullName: string, approvals: Set<string>, c
     return approvals.size >= requiredApprovals;
 }
 
- /**
- * Helper function to parse stored PR info and convert arrays back to Sets
- */
- export function parsePrInfo(storedData: string): PrSlackMessageInfo {
-    const parsed = JSON.parse(storedData);
-    return {
-        ...parsed,
-        approvals: new Set(parsed.approvals || []),
-        changesRequested: new Set(parsed.changesRequested || []),
-        botReactions: new Set(parsed.botReactions || [])
-    };
-}
-
-/**
- * Helper function to prepare PR info for Redis storage (convert Sets to Arrays)
- */
-export function preparePrInfoForStorage(prInfo: PrSlackMessageInfo): any {
-    return {
-        ...prInfo,
-        approvals: Array.from(prInfo.approvals),
-        changesRequested: Array.from(prInfo.changesRequested),
-        botReactions: Array.from(prInfo.botReactions)
-    };
-}
-
 /**
  * Get some common useful information from the PR events.
  * @param data
@@ -93,13 +67,6 @@ export const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentE
         redisPrKey: `pr:${data.repository.id}:${data.pull_request.number}`,
     }
 }
-
-export function setPrMessageInfo(redisPrKey:string, prInfo: PrSlackMessageInfo): any {
-    redis.setex(redisPrKey, THREE_DAYS_IN_SECONDS, JSON.stringify(preparePrInfoForStorage(prInfo)));
-}
-
-
-
 
 // Slack signature verification middleware
 export const verifySlackSignature = (signingSecret: string): MiddlewareHandler => {

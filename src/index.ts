@@ -8,12 +8,10 @@ import {
     PullRequestReviewEvent,
     PullRequestReviewCommentEvent
 } from "@octokit/webhooks-types";
-import Redis from 'ioredis';
 import {WebClient} from '@slack/web-api';
 import {
     GITHUB_WEBHOOK_SECRET,
     PORT,
-    REDIS_URL,
     SLACK_BOT_TOKEN, SLACK_WEBHOOK_SECRET,
 } from "./config.js";
 
@@ -26,11 +24,9 @@ const app = new Hono<{
         slackBody: string
     }
 }>()
-export const redis = new Redis(REDIS_URL);
+
 const webhooks = new Webhooks({secret: GITHUB_WEBHOOK_SECRET});
 export const slackClient = new WebClient(SLACK_BOT_TOKEN);
-
-
 
 
 // --- Hono Route for GitHub Webhooks ---
