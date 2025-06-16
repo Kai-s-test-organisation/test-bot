@@ -23,7 +23,7 @@ if (!GITHUB_WEBHOOK_SECRET || !SLACK_BOT_TOKEN || !REDIS_URL || !REVIEWER_GROUP_
 export const REVIEWER_GROUP_CHANNEL_MAP: { [key: string]: string } = JSON.parse(REVIEWER_GROUP_CHANNEL_MAP_RAW)!;
 export const GITHUB_TO_SLACK_USER_MAP: { [key: string]: string } = JSON.parse(GITHUB_TO_SLACK_USER_MAP_RAW)!;
 
-// Parse the comma-separated string into a Set for efficient lookups
+// String to set
 export const TWO_APPROVAL_REPOS = new Set(
     TWO_APPROVAL_REPOS_RAW
         .split(',')              // Split the string into an array

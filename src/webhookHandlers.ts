@@ -3,12 +3,10 @@ import {
     getPrMetaData,
     getSlackChannelForReviewerGroup,
     isPrReadyToMerge,
-    parsePrInfo,
-    setPrMessageInfo
 } from "./utils.js";
 import {addSlackReaction, postPrNotification, removeSlackReaction} from "./slack.js";
 import {APPROVED, CLOSED, COMMENTED, MERGED, NEEDS_REVIEW, PARTIAL_APPROVAL, READY_TO_MERGE} from "./config.js";
-import {redis} from "./index.js";
+import {messageCache} from "./messageCache.js";
 
 export async function handlePrEvent(data: PullRequestEvent) {
     const action = data.action;
@@ -22,8 +20,8 @@ export async function handlePrEvent(data: PullRequestEvent) {
         const channelId = getSlackChannelForReviewerGroup(requestedReviewerTeams);
 
         if (channelId) {
-            const existingDataRaw = await redis.get(redisPrKey);
-            if (existingDataRaw) {
+            const prInfo = messageCache.get(redisPrKey);
+            if (prInfo) {
                 console.log(`PR ${prPayload.html_url} already tracked. Not posting a new message for action: ${action}.`);
             } else {
                 await postPrNotification(
@@ -43,9 +41,8 @@ export async function handlePrEvent(data: PullRequestEvent) {
 
     // Handle PR synchronize (new commits pushed)
     else if (action === "synchronize") {
-        const existingDataRaw = await redis.get(redisPrKey);
-        if (existingDataRaw) {
-            const prInfo = parsePrInfo(existingDataRaw);
+        const prInfo = messageCache.get(redisPrKey);
+        if (prInfo) {
 
             // Clear approvals and changes requested on new commits
             prInfo.approvals.clear();
@@ -60,7 +57,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
             // TODO: Maybe add emoji to signify that needs a recheck?
             // Usually in this case the person just @'s the original reviewer anyways...
 
-            await setPrMessageInfo(redisPrKey, prInfo);
+            messageCache.set(redisPrKey, prInfo);
             console.log(`PR ${prPayload.html_url} synchronized. Approvals/Reviews reset.`);
         } else {
             console.log(`Synchronized PR ${prPayload.html_url} not found in Redis map.`);
@@ -68,9 +65,8 @@ export async function handlePrEvent(data: PullRequestEvent) {
     }
     // Handle PR closed and merged
     else if (action === "closed" && prPayload.merged) {
-        const existingDataRaw = await redis.get(redisPrKey);
-        if (existingDataRaw) {
-            const prInfo = parsePrInfo(existingDataRaw);
+        const prInfo = messageCache.get(redisPrKey);
+        if (prInfo) {
 
             await addSlackReaction(prInfo, APPROVED, redisPrKey);
             await addSlackReaction(prInfo, MERGED, redisPrKey);
@@ -78,7 +74,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, NEEDS_REVIEW, redisPrKey);
             await removeSlackReaction(prInfo, COMMENTED, redisPrKey);
 
-            await redis.del(redisPrKey);
+            messageCache.delete(redisPrKey);
             console.log(`PR ${prPayload.html_url} merged. Status reflected with emojis.`);
         } else {
             console.log(`Merged PR ${prPayload.html_url} not found in Redis map.`);
@@ -86,9 +82,8 @@ export async function handlePrEvent(data: PullRequestEvent) {
     }
     // Handle PR closed (unmerged)
     else if (action === "closed" && !prPayload.merged) {
-        const existingDataRaw = await redis.get(redisPrKey);
-        if (existingDataRaw) {
-            const prInfo = parsePrInfo(existingDataRaw);
+        const prInfo = messageCache.get(redisPrKey);
+        if (prInfo) {
 
             await addSlackReaction(prInfo, CLOSED, redisPrKey);
             await removeSlackReaction(prInfo, APPROVED, redisPrKey);
@@ -96,7 +91,7 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, NEEDS_REVIEW, redisPrKey);
             await removeSlackReaction(prInfo, COMMENTED, redisPrKey);
 
-            await redis.del(redisPrKey);
+            messageCache.delete(redisPrKey);
             console.log(`PR ${prPayload.html_url} closed (unmerged).`);
         } else {
             console.log(`Closed PR ${prPayload.html_url} not found in Redis map.`);
@@ -107,9 +102,8 @@ export async function handlePrEvent(data: PullRequestEvent) {
 export async function handlePrReviewComment(data: PullRequestReviewCommentEvent) {
     const {redisPrKey} = getPrMetaData(data);
     // These are inline comments in code review. A general comment emoji might be sufficient.
-    const existingDataRaw = await redis.get(redisPrKey);
-    if (existingDataRaw) {
-        const prInfo = parsePrInfo(existingDataRaw);
+    const prInfo = messageCache.get(redisPrKey);
+    if (prInfo) {
         await addSlackReaction(prInfo, COMMENTED, redisPrKey);
         console.log(`Code comment on PR ${data.pull_request.html_url}. Emoji added.`);
         // No change to approvals/changesRequested, so no need to save prInfo back
@@ -123,13 +117,11 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
     const reviewerGithub = data.review.user.login;
     const {redisPrKey} = getPrMetaData(data);
 
-    const existingDataRaw = await redis.get(redisPrKey);
-    if (!existingDataRaw) {
+    const prInfo = messageCache.get(redisPrKey);
+    if (!prInfo) {
         console.log(`Review for PR ${data.pull_request.html_url} not found in Redis map. Cannot update slack message.`);
         return
     }
-
-    const prInfo = parsePrInfo(existingDataRaw);
 
     if (reviewState === "approved") {
         prInfo.changesRequested.delete(reviewerGithub); // Remove from changes requested if they previously requested changes
@@ -159,5 +151,5 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
         console.log(`PR ${data.pull_request.html_url} changes requested by ${reviewerGithub}. Slack message updated.`);
     }
 
-    await setPrMessageInfo(redisPrKey, prInfo);
+    messageCache.set(redisPrKey, prInfo);
 }

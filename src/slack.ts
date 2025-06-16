@@ -1,15 +1,16 @@
-import {getSlackUserId, preparePrInfoForStorage, setPrMessageInfo} from "./utils.js";
-import {slackClient, redis} from "./index.js";
-import {PrSlackMessageInfo} from "./types";
+import {getSlackUserId} from "./utils.js";
+import {slackClient} from "./index.js";
+import {PrSlackMessage} from "./types";
+import {messageCache} from "./messageCache.js";
 
 /**
  * Posts a new PR notification message to Slack and stores its essential info in Redis.
  * @param channelId The Slack channel ID.
- * @param prLink The URL of the PR.
- * @param prTitle The title of the PR.
- * @param prCreatorGithub The GitHub username of the PR creator.
- * @param prNumber The PR number.
- * @param repoId The repository ID.
+ * @param prLink
+ * @param prTitle
+ * @param prCreatorGithub
+ * @param prNumber
+ * @param redisPrKey Key for storing data.
  * @param repoFullName The full repository name (owner/repo).
  * @returns The timestamp (ts) of the posted Slack message, or null on failure.
  */
@@ -22,9 +23,9 @@ export async function postPrNotification(
     redisPrKey: string,
     repoFullName: string
 ): Promise<string | null> {
-
-    const creatorMention = getSlackUserId(prCreatorGithub)
-        ? `<@${getSlackUserId(prCreatorGithub)}>`
+    const slackUserId = getSlackUserId(channelId);
+    const creatorMention = slackUserId
+        ? `<@${slackUserId}>`
         : `*${prCreatorGithub}*`;
 
 
@@ -44,7 +45,7 @@ export async function postPrNotification(
         console.log(`Posted new PR notification to channel ${channelId}. Message TS: ${response.ts}`);
 
         if (response.ts) {
-            const prInfo: PrSlackMessageInfo = {
+            const prInfo: PrSlackMessage = {
                 channel: channelId,
                 ts: response.ts,
                 repoFullName: repoFullName,
@@ -52,8 +53,7 @@ export async function postPrNotification(
                 changesRequested: new Set(),
                 botReactions: new Set()
             };
-
-            await setPrMessageInfo(redisPrKey, prInfo);
+            messageCache.set(redisPrKey, prInfo);
             console.log(`Stored essential PR info for ${prLink} with TS ${response.ts} in Redis.`);
         }
         return response.ts as string;
@@ -65,13 +65,12 @@ export async function postPrNotification(
 }
 
 /**
- * Adds an emoji reaction to a Slack message, updating Redis state.
- * Enhanced with better error handling and state synchronization.
+ * Adds an emoji reaction to a Slack message and updates redis state.
  * @param prInfo The PR Slack message info object.
- * @param reactionEmoji The name of the emoji (e.g., 'white_check_mark').
+ * @param reactionEmoji The name of the emoji
  * @param redisKey The Redis key for the PR info.
  */
-export async function addSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji: string, redisKey: string) {
+export async function addSlackReaction(prInfo: PrSlackMessage, reactionEmoji: string, redisKey: string) {
     if (prInfo.botReactions.has(reactionEmoji)) {
         return;
     }
@@ -85,7 +84,7 @@ export async function addSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji
 
         // Success - update local state
         prInfo.botReactions.add(reactionEmoji);
-        await setPrMessageInfo(redisKey, prInfo);
+        messageCache.set(redisKey, prInfo);
         console.log(`Added :${reactionEmoji}: reaction to message ${prInfo.ts} in channel ${prInfo.channel}`);
 
     } catch (error: any) {
@@ -93,7 +92,7 @@ export async function addSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji
             // Slack says it's already there, sync Redis
             console.log(`Slack reported 'already_reacted' for :${reactionEmoji}: on message ${prInfo.ts}. Syncing Redis state.`);
             prInfo.botReactions.add(reactionEmoji);
-            await setPrMessageInfo(redisKey, prInfo);
+            messageCache.set(redisKey, prInfo);
         } else {
             // Some other error occurred
             console.error(`Error adding reaction :${reactionEmoji}: to message ${prInfo.ts}:`, error.message);
@@ -109,7 +108,7 @@ export async function addSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji
  * @param reactionEmoji The name of the emoji.
  * @param redisKey The Redis key for the PR info.
  */
-export async function removeSlackReaction(prInfo: PrSlackMessageInfo, reactionEmoji: string, redisKey: string) {
+export async function removeSlackReaction(prInfo: PrSlackMessage, reactionEmoji: string, redisKey: string) {
     if (!prInfo.botReactions.has(reactionEmoji)) {
         return;
     }
@@ -123,7 +122,7 @@ export async function removeSlackReaction(prInfo: PrSlackMessageInfo, reactionEm
 
         // Success - update local state
         prInfo.botReactions.delete(reactionEmoji);
-        await setPrMessageInfo(redisKey, prInfo);
+        messageCache.set(redisKey, prInfo);
         console.log(`Removed :${reactionEmoji}: reaction from message ${prInfo.ts} in channel ${prInfo.channel}`);
 
     } catch (error: any) {
@@ -131,7 +130,7 @@ export async function removeSlackReaction(prInfo: PrSlackMessageInfo, reactionEm
             // Slack says it's not there, sync Redis.
             console.log(`Slack reported 'not_reacted' for :${reactionEmoji}: on message ${prInfo.ts}. Syncing Redis state.`);
             prInfo.botReactions.delete(reactionEmoji);
-            await setPrMessageInfo(redisKey, prInfo);
+            messageCache.set(redisKey, prInfo);
         } else {
             // Some other error occurred
             console.error(`Error removing reaction :${reactionEmoji}: from message ${prInfo.ts}:`, error.message);

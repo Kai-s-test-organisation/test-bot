@@ -1,7 +1,6 @@
-import { Context as HonoContext } from 'hono';
 
-// Type for Redis Stored Data
-export interface PrSlackMessageInfo {
+// Type for message metadata
+export interface PrSlackMessage {
     channel: string;
     ts: string;
     repoFullName: string; // needed for TWO_APPROVAL_REPOS check
