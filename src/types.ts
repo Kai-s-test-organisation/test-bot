@@ -1,12 +1,14 @@
 
 // Type for message metadata
 export interface PrSlackMessage {
-    channel: string;
-    ts: string;
-    repoFullName: string; // needed for TWO_APPROVAL_REPOS check
-    approvals: Set<string>; // Track who has approved
-    changesRequested: Set<string>; // Track who requested changes
-    botReactions: Set<string>; // Track current reactions on the message
+    slackMessages: {
+        channel: string;
+        ts: string;
+    }[]
+    repoFullName: string;
+    approvals: Set<string>;
+    changesRequested: Set<string>;
+    botReactions: Set<string>;
 }
 
 // Has more fields but we don't need em.

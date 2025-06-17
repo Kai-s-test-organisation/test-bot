@@ -60,7 +60,7 @@ app.post('/github-webhook', async (c) => {
     } else if (eventType === "pull_request_review_comment") {
         await handlePrReviewComment(parsed_data as PullRequestReviewCommentEvent)
     } else if (eventType === "pull_request_review") {
-        handlePrReviewEvent(parsed_data as PullRequestReviewEvent)
+        await handlePrReviewEvent(parsed_data as PullRequestReviewEvent)
     } else {
         console.log(`Unhandled GitHub event type: ${eventType}`);
     }

@@ -1,10 +1,9 @@
-import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent} from "@octokit/webhooks-types";
+import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent, Team} from "@octokit/webhooks-types";
 import { createHmac, timingSafeEqual } from 'crypto'
 import type { Context, Next, MiddlewareHandler } from 'hono'
 import {
     GITHUB_TO_SLACK_USER_MAP,
     REVIEWER_GROUP_CHANNEL_MAP,
-    THREE_DAYS_IN_SECONDS,
     TWO_APPROVAL_REPOS
 } from "./config.js";
 import {SlackSlashCommandPayload} from "./types.js";
@@ -14,14 +13,8 @@ import {SlackSlashCommandPayload} from "./types.js";
  * @param reviewerGroups An array of GitHub team objects (e.g., from pull_request.requested_teams).
  * @returns The Slack channel ID or null if no mapping is found.
  */
-export function getSlackChannelForReviewerGroup(reviewerGroups: any[]): string | null {
-    // return "C0904A41ABH"
-    for (const group of reviewerGroups) {
-        if (group.slug && REVIEWER_GROUP_CHANNEL_MAP[group.slug]) {
-            return REVIEWER_GROUP_CHANNEL_MAP[group.slug];
-        }
-    }
-    return null;
+export function getSlackChannelsForReviewerGroup(reviewerGroups: Team[]): string[] {
+    return reviewerGroups.map(rg => REVIEWER_GROUP_CHANNEL_MAP[rg.slug])
 }
 
 /**
@@ -58,13 +51,13 @@ export const getPrMetaData = (data: PullRequestEvent | PullRequestReviewCommentE
     prNumber: number,
     repoId: number,
     repoFullName: string,
-    redisPrKey: string
+    prMsgKey: string
 } => {
     return {
         prNumber: data.pull_request.number,
         repoId: data.repository.id,
         repoFullName: data.repository.full_name,
-        redisPrKey: `pr:${data.repository.id}:${data.pull_request.number}`,
+        prMsgKey: `${data.repository.id}:${data.pull_request.number}`,
     }
 }
 
