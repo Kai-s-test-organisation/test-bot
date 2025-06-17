@@ -1,19 +1,13 @@
 import NodeCache from "node-cache";
 import {THREE_DAYS_IN_SECONDS} from "./config.js";
+import {PrSlackMessage} from "./types";
 
-export interface PrSlackMessage {
-    channel: string;
-    ts: string;
-    repoFullName: string;
-    approvals: Set<string>;
-    changesRequested: Set<string>;
-    botReactions: Set<string>;
-}
-
-// Storage interface
+// Storage interface -> can't really store a set in js map.
 interface PrSlackMessageStorage {
-    channel: string;
-    ts: string;
+    slackMessages: {
+        channel: string;
+        ts: string;
+    }[]
     repoFullName: string;
     approvals: string[];
     changesRequested: string[];
