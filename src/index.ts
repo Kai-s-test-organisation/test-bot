@@ -16,7 +16,7 @@ import {
 } from "./config.js";
 
 import {handlePrEvent, handlePrReviewComment, handlePrReviewEvent} from "./webhookHandlers.js";
-import {parseSlackBody, verifySlackSignature} from "./utils.js";
+import {getPrMetaData, parseSlackBody, verifySlackSignature, withPrLock} from "./utils.js";
 import {mapper} from "./db.js";
 import { logger } from './config.js';
 
@@ -57,13 +57,24 @@ app.post('/github-webhook', async (c) => {
     }
 
     const parsed_data = JSON.parse(payload) as WebhookEvent;
+    if (
+        eventType === "pull_request" ||
+        eventType === "pull_request_review_comment" ||
+        eventType === "pull_request_review"
+    ) {
+        const { prMsgKey } = getPrMetaData(parsed_data as PullRequestEvent); // works for all PR-based events
 
-    if (eventType === "pull_request") {
-        await handlePrEvent(parsed_data as PullRequestEvent)
-    } else if (eventType === "pull_request_review_comment") {
-        await handlePrReviewComment(parsed_data as PullRequestReviewCommentEvent)
-    } else if (eventType === "pull_request_review") {
-        await handlePrReviewEvent(parsed_data as PullRequestReviewEvent)
+        // Yeah, I actually ran into a race condition because GitHub sends multiples events in very quick succession
+        // and sometimes duplicate ones for some reason?
+        await withPrLock(prMsgKey, async () => {
+            if (eventType === "pull_request") {
+                await handlePrEvent(parsed_data as PullRequestEvent);
+            } else if (eventType === "pull_request_review_comment") {
+                await handlePrReviewComment(parsed_data as PullRequestReviewCommentEvent);
+            } else if (eventType === "pull_request_review") {
+                await handlePrReviewEvent(parsed_data as PullRequestReviewEvent);
+            }
+        });
     } else {
         logger.debug({ eventType }, "Unhandled GitHub event type received");
     }

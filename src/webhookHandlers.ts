@@ -21,11 +21,12 @@ export async function handlePrEvent(data: PullRequestEvent) {
         const requestedReviewerTeams = prPayload.requested_teams || [];
         const allChannelIds = getSlackChannelsForReviewerGroup(requestedReviewerTeams);
 
-
         if (allChannelIds.length > 0) {
             let channelsToNotify = allChannelIds;
             if (prInfo) {
-                // need to do this in case we request a review from more than one team.
+                // need to do this in case we request a review from a team after initial creation
+                // like request from team A on creation then team B after.
+
                 // get the existing channels we have notified, remove those from all the channels we need to notify.
                 const existingChannels = new Set(prInfo.slackMessages.map(m => m.channel));
                 channelsToNotify = allChannelIds.filter(id => !existingChannels.has(id));
