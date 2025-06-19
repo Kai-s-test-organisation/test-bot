@@ -7,6 +7,7 @@ import {
 import {addSlackReaction, postPrNotification, removeSlackReaction} from "./slack.js";
 import {APPROVED, CLOSED, COMMENTED, MERGED, NEEDS_REVIEW, PARTIAL_APPROVAL, READY_TO_MERGE} from "./config.js";
 import {messageCache} from "./messageCache.js";
+import { logger } from './config.js';
 
 export async function handlePrEvent(data: PullRequestEvent) {
     const action = data.action;
@@ -22,7 +23,11 @@ export async function handlePrEvent(data: PullRequestEvent) {
         if (channelIds.length > 0) {
             const prInfo = messageCache.get(prMsgKey);
             if (prInfo) {
-                console.log(`PR ${prPayload.html_url} already tracked. Not posting a new message for action: ${action}.`);
+                logger.debug({
+                    prUrl: prPayload.html_url,
+                    action,
+                    prMsgKey
+                }, "PR already tracked, not posting new message");
             } else {
                 await postPrNotification(
                     channelIds,
@@ -35,7 +40,10 @@ export async function handlePrEvent(data: PullRequestEvent) {
                 );
             }
         } else {
-            console.log(`No Slack channel found for requested reviewer teams: ${JSON.stringify(requestedReviewerTeams)} for PR ${prPayload.html_url}`);
+            logger.info({
+                requestedTeams: requestedReviewerTeams.map(team => team.name),
+                prUrl: prPayload.html_url
+            }, "No Slack channels found for requested reviewer teams");
         }
     }
 
@@ -58,9 +66,15 @@ export async function handlePrEvent(data: PullRequestEvent) {
             // Usually in this case the person just @'s the original reviewer anyways...
 
             messageCache.set(prMsgKey, prInfo);
-            console.log(`PR ${prPayload.html_url} synchronized. Approvals/Reviews reset.`);
+            logger.info({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "PR synchronized - approvals and reviews reset");
         } else {
-            console.log(`Synchronized PR ${prPayload.html_url} not found in Redis map.`);
+            logger.warn({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "Synchronized PR not found in message cache");
         }
     }
     // Handle PR closed and merged
@@ -75,9 +89,15 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, COMMENTED, prMsgKey);
 
             messageCache.delete(prMsgKey);
-            console.log(`PR ${prPayload.html_url} merged. Status reflected with emojis.`);
+            logger.info({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "PR merged successfully - status reflected with emojis");
         } else {
-            console.log(`Merged PR ${prPayload.html_url} not found in Redis map.`);
+            logger.warn({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "Merged PR not found in message cache");
         }
     }
     // Handle PR closed (unmerged)
@@ -92,9 +112,15 @@ export async function handlePrEvent(data: PullRequestEvent) {
             await removeSlackReaction(prInfo, COMMENTED, prMsgKey);
 
             messageCache.delete(prMsgKey);
-            console.log(`PR ${prPayload.html_url} closed (unmerged).`);
+            logger.info({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "PR closed without merging");
         } else {
-            console.log(`Closed PR ${prPayload.html_url} not found in Redis map.`);
+            logger.warn({
+                prUrl: prPayload.html_url,
+                prMsgKey
+            }, "Closed PR not found in message cache");
         }
     }
 }
@@ -105,10 +131,18 @@ export async function handlePrReviewComment(data: PullRequestReviewCommentEvent)
     const prInfo = messageCache.get(prMsgKey);
     if (prInfo) {
         await addSlackReaction(prInfo, COMMENTED, prMsgKey);
-        console.log(`Code comment on PR ${data.pull_request.html_url}. Emoji added.`);
+        logger.debug({
+            prUrl: data.pull_request.html_url,
+            commenter: data.comment.user.login,
+            prMsgKey
+        }, "Code review comment added - emoji reaction applied");
         // No change to approvals/changesRequested, so no need to save prInfo back
     } else {
-        console.log(`Code comment for PR ${data.pull_request.html_url} not found in Redis map.`);
+        logger.warn({
+            prUrl: data.pull_request.html_url,
+            commenter: data.comment.user.login,
+            prMsgKey
+        }, "Code review comment for PR not found in message cache");
     }
 }
 
@@ -119,7 +153,12 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
 
     const prInfo = messageCache.get(prMsgKey);
     if (!prInfo) {
-        console.log(`Review for PR ${data.pull_request.html_url} not found in Redis map. Cannot update slack message.`);
+        logger.warn({
+            prUrl: data.pull_request.html_url,
+            reviewer: reviewerGithub,
+            reviewState,
+            prMsgKey
+        }, "PR review event received but PR not found in message cache");
         return
     }
 
@@ -140,7 +179,13 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
             await addSlackReaction(prInfo, PARTIAL_APPROVAL, prMsgKey);
         }
 
-        console.log(`PR ${data.pull_request.html_url} approved by ${reviewerGithub}. Slack message updated.`);
+        logger.info({
+            prUrl: data.pull_request.html_url,
+            reviewer: reviewerGithub,
+            approvalCount: prInfo.approvals.size,
+            isReadyToMerge,
+            prMsgKey
+        }, "PR approved by reviewer - Slack message updated");
     } else if (reviewState === "changes_requested") {
         prInfo.approvals.delete(reviewerGithub);
         prInfo.changesRequested.add(reviewerGithub);
@@ -149,7 +194,12 @@ export async function handlePrReviewEvent(data: PullRequestReviewEvent) {
         await removeSlackReaction(prInfo, READY_TO_MERGE, prMsgKey);
         await removeSlackReaction(prInfo, APPROVED, prMsgKey);
 
-        console.log(`PR ${data.pull_request.html_url} changes requested by ${reviewerGithub}. Slack message updated.`);
+        logger.info({
+            prUrl: data.pull_request.html_url,
+            reviewer: reviewerGithub,
+            changesRequestedCount: prInfo.changesRequested.size,
+            prMsgKey
+        }, "Changes requested by reviewer - Slack message updated");
     }
 
     messageCache.set(prMsgKey, prInfo);

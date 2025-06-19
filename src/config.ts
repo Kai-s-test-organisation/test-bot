@@ -1,7 +1,14 @@
 import dotenv from 'dotenv';
+import pino from 'pino';
 
 // Load environment variables from .env file
 dotenv.config();
+
+export const logger = pino({
+    level: process.env.LOG_LEVEL || 'info',
+    base: { service: 'github-slack-mapper' }
+});
+
 
 // --- Configuration from Environment Variables ---
 export const GITHUB_WEBHOOK_SECRET = process.env.GITHUB_WEBHOOK_SECRET!;
