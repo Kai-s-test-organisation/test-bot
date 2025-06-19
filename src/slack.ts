@@ -1,18 +1,11 @@
-import {getSlackUserId} from "./utils.js";
-import {slackClient} from "./index.js";
-import {PrSlackMessage} from "./types";
-import {messageCache} from "./messageCache.js";
+import { getSlackUserId } from "./utils.js";
+import { slackClient } from "./index.js";
+import { PrSlackMessage } from "./types";
+import { messageCache } from "./messageCache.js";
+import { logger } from "./config.js"; // ✅ Pino logger
 
 /**
  * Posts a new PR notification message to Slack and stores its essential info in local cache.
- * @param channelId The Slack channel ID.
- * @param prLink
- * @param prTitle
- * @param prCreatorGithub
- * @param prNumber
- * @param prMsgKey Key for storing data.
- * @param repoFullName The full repository name (owner/repo).
- * @returns The timestamp (ts) of the posted Slack message, or null on failure.
  */
 export async function postPrNotification(
     channelIds: string[],
@@ -32,7 +25,8 @@ export async function postPrNotification(
                 text: messageText,
                 mrkdwn: true,
             });
-            console.log(`Posted new PR notification to channel ${channelId}. Message TS: ${response.ts}`);
+
+            logger.info({ channel: channelId, ts: response.ts }, 'Posted new PR notification to Slack');
 
             return {
                 success: true,
@@ -40,8 +34,8 @@ export async function postPrNotification(
                 ts: response.ts as string
             };
         } catch (error: any) {
-            console.error(`Error posting message to Slack channel ${channelId}:`, error.message);
-            if (error.data) console.error("Slack API Error Data:", error.data);
+            logger.error({ channel: channelId, err: error }, 'Error posting message to Slack channel');
+            if (error.data) logger.error({ data: error.data }, 'Slack API Error Data');
             return {
                 success: false,
                 channel: channelId,
@@ -53,7 +47,6 @@ export async function postPrNotification(
 
     const results = await Promise.allSettled(promises);
 
-    // Collect successful posts
     const successfulPosts = results
         .filter(result => result.status === 'fulfilled' && result.value.success)
         .map(result => ({
@@ -62,26 +55,25 @@ export async function postPrNotification(
         }));
 
     if (successfulPosts.length === 0) {
-        console.error('Failed to post PR notification to any channels');
+        logger.error('Failed to post PR notification to any channels');
         return null;
     }
 
-    // Create new prInfo based on successful posts
     const prInfo: PrSlackMessage = {
         slackMessages: successfulPosts,
-        repoFullName: repoFullName,
+        repoFullName,
         approvals: new Set(),
         changesRequested: new Set(),
         botReactions: new Set()
     };
 
     messageCache.set(prMsgKey, prInfo);
-    console.log(`Stored essential PR info for ${prLink} with ${successfulPosts.length} messages in local cache.`);
+    logger.info({ prLink, channels: successfulPosts.length }, 'Stored PR info in local cache');
 
     return prInfo;
 }
 
-// Helper function to build message text
+// Helper to format message text
 function buildMessageText(
     prLink: string,
     prTitle: string,
@@ -105,9 +97,6 @@ function buildMessageText(
 
 /**
  * Adds an emoji reaction to a Slack message and updates local state.
- * @param prInfo The PR Slack message info object.
- * @param reactionEmoji The name of the emoji
- * @param prMsgKey The cache key for the PR info.
  */
 export async function addSlackReaction(prInfo: PrSlackMessage, reactionEmoji: string, prMsgKey: string) {
     if (prInfo.botReactions.has(reactionEmoji)) {
@@ -121,23 +110,22 @@ export async function addSlackReaction(prInfo: PrSlackMessage, reactionEmoji: st
                 timestamp: ts,
                 name: reactionEmoji,
             });
-            console.log(`Added :${reactionEmoji}: reaction to message ${ts} in channel ${channel}`);
+
+            logger.info({ emoji: reactionEmoji, ts, channel }, 'Added reaction to Slack message');
             return { success: true, channel, ts };
         } catch (error: any) {
             if (error.data && error.data.error === 'already_reacted') {
-                console.log(`Slack reported 'already_reacted' for :${reactionEmoji}: on message ${ts}. Syncing cache state.`);
+                logger.info({ emoji: reactionEmoji, ts }, `'already_reacted' reported. Syncing cache state.`);
                 return { success: true, channel, ts };
             } else {
-                console.error(`Error adding reaction :${reactionEmoji}: to message ${ts}:`, error.message);
-                if (error.data) console.error("Slack API Error Data:", error.data);
+                logger.error({ emoji: reactionEmoji, ts, err: error }, 'Error adding Slack reaction');
+                if (error.data) logger.error({ data: error.data }, 'Slack API Error Data');
                 return { success: false, channel, ts, error };
             }
         }
     });
 
     const results = await Promise.allSettled(promises);
-
-    // Update cache if all operations succeeded or were already present
     const allSucceeded = results.every(result =>
         result.status === 'fulfilled' && result.value.success
     );
@@ -150,10 +138,6 @@ export async function addSlackReaction(prInfo: PrSlackMessage, reactionEmoji: st
 
 /**
  * Removes an emoji reaction from a Slack message, updating local state.
- * Enhanced with better error handling and state synchronization.
- * @param prInfo The PR Slack message info object.
- * @param reactionEmoji The name of the emoji.
- * @param prMsgKey The cache key for the PR info.
  */
 export async function removeSlackReaction(prInfo: PrSlackMessage, reactionEmoji: string, prMsgKey: string) {
     if (!prInfo.botReactions.has(reactionEmoji)) {
@@ -167,23 +151,22 @@ export async function removeSlackReaction(prInfo: PrSlackMessage, reactionEmoji:
                 timestamp: ts,
                 name: reactionEmoji,
             });
-            console.log(`Removed :${reactionEmoji}: reaction from message ${ts} in channel ${channel}`);
+
+            logger.info({ emoji: reactionEmoji, ts, channel }, 'Removed reaction from Slack message');
             return { success: true, channel, ts };
         } catch (error: any) {
             if (error.data && error.data.error === 'not_reacted') {
-                console.log(`Slack reported 'not_reacted' for :${reactionEmoji}: on message ${ts}. Syncing cache state.`);
+                logger.info({ emoji: reactionEmoji, ts }, `'not_reacted' reported. Syncing cache state.`);
                 return { success: true, channel, ts };
             } else {
-                console.error(`Error removing reaction :${reactionEmoji}: from message ${ts}:`, error.message);
-                if (error.data) console.error("Slack API Error Data:", error.data);
+                logger.error({ emoji: reactionEmoji, ts, err: error }, 'Error removing Slack reaction');
+                if (error.data) logger.error({ data: error.data }, 'Slack API Error Data');
                 return { success: false, channel, ts, error };
             }
         }
     });
 
     const results = await Promise.allSettled(promises);
-
-    // Update cache if all operations succeeded
     const allSucceeded = results.every(result =>
         result.status === 'fulfilled' && result.value.success
     );

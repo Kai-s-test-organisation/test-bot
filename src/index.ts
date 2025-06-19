@@ -17,6 +17,8 @@ import {
 
 import {handlePrEvent, handlePrReviewComment, handlePrReviewEvent} from "./webhookHandlers.js";
 import {parseSlackBody, verifySlackSignature} from "./utils.js";
+import {mapper} from "./db.js";
+import { logger } from './config.js';
 
 // Initialization
 const app = new Hono<{
@@ -36,7 +38,7 @@ app.post('/github-webhook', async (c) => {
     const payload = await c.req.text();
 
     if (!signature || !eventType || !payload) {
-        console.warn("Received webhook with missing headers or payload.");
+        logger.warn({ signature: !!signature, eventType, hasPayload: !!payload }, "Received webhook with missing headers or payload");
         return c.json({message: 'Missing headers or payload'}, 400);
     }
 
@@ -44,12 +46,13 @@ app.post('/github-webhook', async (c) => {
         // Verify the webhook signature
         const isValid = await webhooks.verify(payload, signature);
         if (!isValid) {
-            console.error(`Webhook signature verification failed for event ${eventType}`);
+            logger.error({ eventType }, "Webhook signature verification failed");
             return c.json({message: 'Invalid signature'}, 401);
         }
-        console.log(`Webhook received for event: ${eventType}`);
+        logger.info({ eventType }, "GitHub webhook received and verified");
     } catch (error) {
-        console.error(`Webhook signature verification failed for event ${eventType}:`, error);
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errorMessage, eventType }, "Webhook signature verification failed");
         return c.json({message: 'Invalid signature'}, 401);
     }
 
@@ -62,7 +65,7 @@ app.post('/github-webhook', async (c) => {
     } else if (eventType === "pull_request_review") {
         await handlePrReviewEvent(parsed_data as PullRequestReviewEvent)
     } else {
-        console.log(`Unhandled GitHub event type: ${eventType}`);
+        logger.debug({ eventType }, "Unhandled GitHub event type received");
     }
 
     return c.json({message: 'Webhook received and processed'});
@@ -79,6 +82,7 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         const slackData = parseSlackBody(rawBody)
 
         if (!slackData.text || !slackData.text.trim()) {
+            logger.debug({ userId: slackData.user_id }, "Slack user attempted to add GitHub user without providing username");
             return c.json({
                 response_type: 'ephemeral',
                 text: 'Please provide a GitHub username. Usage: /addGithubUser <github-username>'
@@ -86,6 +90,7 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         }
 
         if (!slackData.user_id) {
+            logger.warn("Unable to identify Slack user in /addGithubUser command");
             return c.json({
                 response_type: 'ephemeral',
                 text: 'Unable to identify user. Please try again.'
@@ -96,7 +101,8 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         const slackUserId = slackData.user_id
 
         // Your Redis logic here...
-        console.log(`User ${slackUserId} wants to add GitHub user: ${githubUsername}`)
+        logger.info({ slackUserId, githubUsername }, "Adding GitHub user mapping for Slack user");
+        mapper.setSlackUsername(githubUsername, slackUserId);
 
         return c.json({
             response_type: 'ephemeral',
@@ -104,7 +110,8 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         })
 
     } catch (error) {
-        console.error('Error handling /addGithubUser:', error)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errorMessage }, "Error handling /addGithubUser slash command");
         return c.json({
             response_type: 'ephemeral',
             text: '❌ Error processing your request. Please try again.'
@@ -112,13 +119,13 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
     }
 })
 
-
 app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async (c: Context) => {
     try {
         const rawBody = c.get('slackBody')
         const slackData = parseSlackBody(rawBody)
 
         if (!slackData.text || !slackData.text.trim()) {
+            logger.debug({ channelId: slackData.channel_id }, "Slack channel attempted to add GitHub team without providing team name");
             return c.json({
                 response_type: 'ephemeral',
                 text: 'Please provide a GitHub team name. Usage: /addChannel <github-team>'
@@ -126,6 +133,7 @@ app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async 
         }
 
         if (!slackData.channel_id) {
+            logger.warn("Unable to identify Slack channel in /addChannel command");
             return c.json({
                 response_type: 'ephemeral',
                 text: 'Unable to identify channel. Please try again.'
@@ -135,8 +143,8 @@ app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async 
         const githubTeam = slackData.text.trim()
         const channelId = slackData.channel_id
 
-        // Your Redis logic here...
-        console.log(`Channel ${channelId} wants to add GitHub team: ${githubTeam}`)
+        logger.info({ channelId, githubTeam }, "Adding GitHub team to Slack channel mapping");
+        mapper.addSlackChannel(githubTeam, channelId);
 
         return c.json({
             response_type: 'ephemeral',
@@ -144,7 +152,8 @@ app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async 
         })
 
     } catch (error) {
-        console.error('Error handling /addChannel:', error)
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errorMessage }, "Error handling /addChannel slash command");
         return c.json({
             response_type: 'ephemeral',
             text: '❌ Error processing your request. Please try again.'
@@ -152,13 +161,96 @@ app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async 
     }
 })
 
+app.post('/slack/removeGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), async (c: Context) => {
+    try {
+        // Get the raw body from middleware
+        const rawBody = c.get('slackBody')
+
+        const slackData = parseSlackBody(rawBody)
+
+        if (!slackData.text || !slackData.text.trim()) {
+            logger.debug({ userId: slackData.user_id }, "Slack user attempted to remove GitHub user without providing username");
+            return c.json({
+                response_type: 'ephemeral',
+                text: 'Please provide a GitHub username. Usage: /addGithubUser <github-username>'
+            })
+        }
+
+        if (!slackData.user_id) {
+            logger.warn("Unable to identify Slack user in /removeGithubUser command");
+            return c.json({
+                response_type: 'ephemeral',
+                text: 'Unable to identify user. Please try again.'
+            })
+        }
+
+        const githubUsername = slackData.text.trim()
+        const slackUserId = slackData.user_id
+
+        logger.info({ slackUserId, githubUsername }, "Removing GitHub user mapping for Slack user");
+        mapper.deleteSlackUsername(githubUsername);
+
+        return c.json({
+            response_type: 'ephemeral',
+            text: `💥 Successfully removed the slack user linked with your github user: ${githubUsername}`
+        })
+
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errorMessage }, "Error handling /removeGithubUser slash command");
+        return c.json({
+            response_type: 'ephemeral',
+            text: '❌ Error processing your request. Please try again.'
+        }, 500)
+    }
+})
+
+app.post('/slack/removeChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async (c: Context) => {
+    try {
+        const rawBody = c.get('slackBody')
+        const slackData = parseSlackBody(rawBody)
+
+        if (!slackData.text || !slackData.text.trim()) {
+            logger.debug({ channelId: slackData.channel_id }, "Slack channel attempted to remove GitHub team without providing team name");
+            return c.json({
+                response_type: 'ephemeral',
+                text: 'Please provide a GitHub team name. Usage: /addChannel <github-team>'
+            })
+        }
+
+        if (!slackData.channel_id) {
+            logger.warn("Unable to identify Slack channel in /removeChannel command");
+            return c.json({
+                response_type: 'ephemeral',
+                text: 'Unable to identify channel. Please try again.'
+            })
+        }
+
+        const githubTeam = slackData.text.trim()
+        const channelId = slackData.channel_id
+
+        logger.info({ channelId, githubTeam }, "Removing GitHub team from Slack channel mapping");
+        mapper.removeSlackChannel(githubTeam, channelId);
+
+        return c.json({
+            response_type: 'ephemeral',
+            text: `💥 Successfully unlinked this channel from GitHub team: ${githubTeam}`
+        })
+
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        logger.error({ error: errorMessage }, "Error handling /removeChannel slash command");
+        return c.json({
+            response_type: 'ephemeral',
+            text: '❌ Error processing your request. Please try again.'
+        }, 500)
+    }
+})
 
 // --- Start Server ---
 serve({
     fetch: app.fetch,
     port: PORT
 }, (info) => {
-    console.log(`Server is listening on http://localhost:${info.port}`);
+    logger.info({ port: info.port }, "Server started and listening for requests");
 });
-
-// TODO: Change redis ttls for PR messages.

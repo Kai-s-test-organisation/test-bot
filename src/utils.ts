@@ -2,11 +2,10 @@ import {PullRequestEvent, PullRequestReviewCommentEvent, PullRequestReviewEvent,
 import { createHmac, timingSafeEqual } from 'crypto'
 import type { Context, Next, MiddlewareHandler } from 'hono'
 import {
-    GITHUB_TO_SLACK_USER_MAP,
-    REVIEWER_GROUP_CHANNEL_MAP,
     TWO_APPROVAL_REPOS
 } from "./config.js";
 import {SlackSlashCommandPayload} from "./types.js";
+import {mapper} from "./db.js"
 
 /**
  * Finds the Slack channel ID for a given GitHub reviewer group.
@@ -14,7 +13,7 @@ import {SlackSlashCommandPayload} from "./types.js";
  * @returns The Slack channel ID or null if no mapping is found.
  */
 export function getSlackChannelsForReviewerGroup(reviewerGroups: Team[]): string[] {
-    return reviewerGroups.map(rg => REVIEWER_GROUP_CHANNEL_MAP[rg.slug])
+    return mapper.getSlackChannelsByGithubTeams(reviewerGroups.map(rg => rg.slug));
 }
 
 /**
@@ -23,7 +22,7 @@ export function getSlackChannelsForReviewerGroup(reviewerGroups: Team[]): string
  * @returns The Slack User ID or null if no mapping is found.
  */
 export function getSlackUserId(githubUsername: string): string | null {
-    return GITHUB_TO_SLACK_USER_MAP[githubUsername] || null;
+    return mapper.getSlackUsername(githubUsername);
 }
 
 /**
