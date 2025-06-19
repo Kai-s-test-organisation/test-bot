@@ -17,6 +17,7 @@ import {
 
 import {handlePrEvent, handlePrReviewComment, handlePrReviewEvent} from "./webhookHandlers.js";
 import {parseSlackBody, verifySlackSignature} from "./utils.js";
+import {mapper} from "./db.js";
 
 // Initialization
 const app = new Hono<{
@@ -97,6 +98,7 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
 
         // Your Redis logic here...
         console.log(`User ${slackUserId} wants to add GitHub user: ${githubUsername}`)
+        mapper.setSlackUsername(githubUsername, slackUserId);
 
         return c.json({
             response_type: 'ephemeral',
@@ -111,7 +113,6 @@ app.post('/slack/addGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         }, 500)
     }
 })
-
 
 app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async (c: Context) => {
     try {
@@ -135,8 +136,8 @@ app.post('/slack/addChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), async 
         const githubTeam = slackData.text.trim()
         const channelId = slackData.channel_id
 
-        // Your Redis logic here...
         console.log(`Channel ${channelId} wants to add GitHub team: ${githubTeam}`)
+        mapper.setSlackChannel(githubTeam, channelId);
 
         return c.json({
             response_type: 'ephemeral',
@@ -160,5 +161,3 @@ serve({
 }, (info) => {
     console.log(`Server is listening on http://localhost:${info.port}`);
 });
-
-// TODO: Change redis ttls for PR messages.

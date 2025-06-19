@@ -5,7 +5,7 @@ import {messageCache} from "./messageCache.js";
 
 /**
  * Posts a new PR notification message to Slack and stores its essential info in local cache.
- * @param channelId The Slack channel ID.
+ * @param channelIds The Slack channel IDs.
  * @param prLink
  * @param prTitle
  * @param prCreatorGithub
