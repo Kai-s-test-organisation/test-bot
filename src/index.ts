@@ -172,7 +172,7 @@ app.post('/slack/removeGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), 
             logger.debug({ userId: slackData.user_id }, "Slack user attempted to remove GitHub user without providing username");
             return c.json({
                 response_type: 'ephemeral',
-                text: 'Please provide a GitHub username. Usage: /addGithubUser <github-username>'
+                text: 'Please provide a GitHub username. Usage: /removeGithubUser <github-username>'
             })
         }
 

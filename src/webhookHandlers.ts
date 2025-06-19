@@ -17,20 +17,23 @@ export async function handlePrEvent(data: PullRequestEvent) {
 
     // TODO: change this to just review requested in the future.
     if (action === "review_requested") {
+        const prInfo = messageCache.get(prMsgKey);
         const requestedReviewerTeams = prPayload.requested_teams || [];
-        const channelIds = getSlackChannelsForReviewerGroup(requestedReviewerTeams);
+        const allChannelIds = getSlackChannelsForReviewerGroup(requestedReviewerTeams);
 
-        if (channelIds.length > 0) {
-            const prInfo = messageCache.get(prMsgKey);
+
+        if (allChannelIds.length > 0) {
+            let channelsToNotify = allChannelIds;
             if (prInfo) {
-                logger.debug({
-                    prUrl: prPayload.html_url,
-                    action,
-                    prMsgKey
-                }, "PR already tracked, not posting new message");
-            } else {
-                await postPrNotification(
-                    channelIds,
+                // need to do this in case we request a review from more than one team.
+                // get the existing channels we have notified, remove those from all the channels we need to notify.
+                const existingChannels = new Set(prInfo.slackMessages.map(m => m.channel));
+                channelsToNotify = allChannelIds.filter(id => !existingChannels.has(id));
+            }
+
+            if (channelsToNotify.length > 0) {
+                const newPrInfo = await postPrNotification(
+                    channelsToNotify,
                     prPayload.html_url,
                     prPayload.title,
                     prPayload.user.login,
@@ -38,6 +41,13 @@ export async function handlePrEvent(data: PullRequestEvent) {
                     prMsgKey,
                     repoFullName!
                 );
+                if (prInfo && newPrInfo) {
+                    // If there was existing info, merge the new message info into the old one
+                    prInfo.slackMessages.push(...newPrInfo.slackMessages);
+                    messageCache.set(prMsgKey, prInfo);
+                }
+            } else {
+                logger.debug({ prMsgKey }, "PR already tracked in all relevant channels.");
             }
         } else {
             logger.info({
