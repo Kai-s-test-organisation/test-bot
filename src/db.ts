@@ -1,5 +1,5 @@
 import Database, { Database as DB, Statement } from 'better-sqlite3';
-import {logger} from "./config.js";
+import {logger, DB_PATH} from "./config.js";
 
 export class GithubSlackMapper {
     private db: DB;
@@ -12,7 +12,7 @@ export class GithubSlackMapper {
     private removeTeamChannelStmt!: Statement<[string, string]>;
     private removeAllTeamChannelsStmt!: Statement<[string]>;
 
-    constructor(dbPath: string = 'mappings.db') {
+    constructor(dbPath: string = DB_PATH) {
         logger.info({ dbPath }, 'Initializing GitHub-Slack mapper');
 
         try {
@@ -219,7 +219,6 @@ export class GithubSlackMapper {
         }
     }
 
-    // Convenience method to replace all channels for a team
     setSlackChannels(githubTeam: string, slackChannels: string[]): void {
         logger.info({ githubTeam, channelCount: slackChannels.length, channels: slackChannels }, 'Setting all Slack channels for GitHub team');
 
@@ -297,10 +296,8 @@ export class GithubSlackMapper {
         }
     }
 
-    // Health check method
     isHealthy(): boolean {
         try {
-            // Simple query to check if database is accessible
             this.db.prepare('SELECT 1').get();
             logger.debug('Database health check passed');
             return true;
@@ -311,17 +308,6 @@ export class GithubSlackMapper {
         }
     }
 
-    // Graceful shutdown
-    close(): void {
-        logger.info('Closing database connection');
-        try {
-            this.db.close();
-            logger.info('Database connection closed successfully');
-        } catch (error) {
-            const errorMessage = error instanceof Error ? error.message : String(error);
-            logger.error({ error: errorMessage }, 'Failed to close database connection');
-        }
-    }
 }
 
 export const mapper = new GithubSlackMapper();

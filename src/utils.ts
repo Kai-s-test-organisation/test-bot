@@ -6,6 +6,7 @@ import {
 } from "./config.js";
 import {SlackSlashCommandPayload} from "./types.js";
 import {mapper} from "./db.js"
+import { Mutex } from "async-mutex";
 
 /**
  * Finds the Slack channel ID for a given GitHub reviewer group.
@@ -110,4 +111,18 @@ export const parseSlackBody = (body: string): Partial<SlackSlashCommandPayload> 
         channel_id: params.get('channel_id') || undefined,
         text: params.get('text') || undefined,
     }
+}
+
+const locks = new Map<string, Mutex>();
+
+function getMutex(key: string): Mutex {
+    if (!locks.has(key)) {
+        locks.set(key, new Mutex());
+    }
+    return locks.get(key)!;
+}
+
+export async function withPrLock<T>(prMsgKey: string, fn: () => Promise<T>): Promise<T> {
+    const mutex = getMutex(prMsgKey);
+    return mutex.runExclusive(fn);
 }

@@ -16,7 +16,7 @@ import {
 } from "./config.js";
 
 import {handlePrEvent, handlePrReviewComment, handlePrReviewEvent} from "./webhookHandlers.js";
-import {parseSlackBody, verifySlackSignature} from "./utils.js";
+import {getPrMetaData, parseSlackBody, verifySlackSignature, withPrLock} from "./utils.js";
 import {mapper} from "./db.js";
 import { logger } from './config.js';
 
@@ -57,13 +57,24 @@ app.post('/github-webhook', async (c) => {
     }
 
     const parsed_data = JSON.parse(payload) as WebhookEvent;
+    if (
+        eventType === "pull_request" ||
+        eventType === "pull_request_review_comment" ||
+        eventType === "pull_request_review"
+    ) {
+        const { prMsgKey } = getPrMetaData(parsed_data as PullRequestEvent); // works for all PR-based events
 
-    if (eventType === "pull_request") {
-        await handlePrEvent(parsed_data as PullRequestEvent)
-    } else if (eventType === "pull_request_review_comment") {
-        await handlePrReviewComment(parsed_data as PullRequestReviewCommentEvent)
-    } else if (eventType === "pull_request_review") {
-        await handlePrReviewEvent(parsed_data as PullRequestReviewEvent)
+        // Yeah, I actually ran into a race condition because GitHub sends multiples events in very quick succession
+        // and sometimes duplicate ones for some reason?
+        await withPrLock(prMsgKey, async () => {
+            if (eventType === "pull_request") {
+                await handlePrEvent(parsed_data as PullRequestEvent);
+            } else if (eventType === "pull_request_review_comment") {
+                await handlePrReviewComment(parsed_data as PullRequestReviewCommentEvent);
+            } else if (eventType === "pull_request_review") {
+                await handlePrReviewEvent(parsed_data as PullRequestReviewEvent);
+            }
+        });
     } else {
         logger.debug({ eventType }, "Unhandled GitHub event type received");
     }
@@ -172,7 +183,7 @@ app.post('/slack/removeGithubUser', verifySlackSignature(SLACK_WEBHOOK_SECRET), 
             logger.debug({ userId: slackData.user_id }, "Slack user attempted to remove GitHub user without providing username");
             return c.json({
                 response_type: 'ephemeral',
-                text: 'Please provide a GitHub username. Usage: /addGithubUser <github-username>'
+                text: 'Please provide a GitHub username. Usage: /removeGithubUser <github-username>'
             })
         }
 
@@ -246,6 +257,46 @@ app.post('/slack/removeChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
         }, 500)
     }
 })
+
+// --- Health Check Route ---
+app.get('/health', async (c) => {
+    const healthStatus = {
+        status: 'ok',
+        database: 'ok',
+        slack: 'ok',
+        timestamp: new Date().toISOString()
+    };
+    const errors: string[] = [];
+
+    try {
+        if (!mapper.isHealthy()) { //
+            throw new Error('Database health check failed');
+        }
+    } catch (error: any) {
+        healthStatus.database = 'error';
+        errors.push(error.message);
+    }
+
+    try {
+        const slackAuth = await slackClient.auth.test();
+        if (!slackAuth.ok) {
+            throw new Error(slackAuth.error || 'Slack authentication test failed');
+        }
+    } catch (error: any) {
+        healthStatus.slack = 'error';
+        errors.push(error.message);
+    }
+
+    if (errors.length > 0) {
+        healthStatus.status = 'error';
+        logger.error({ errors, healthStatus }, "Health check failed");
+        c.status(503); // Use 503 Service Unavailable for failing health checks
+    } else {
+        logger.info("Health check passed");
+    }
+
+    return c.json(healthStatus);
+});
 
 // --- Start Server ---
 serve({
