@@ -258,6 +258,46 @@ app.post('/slack/removeChannel', verifySlackSignature(SLACK_WEBHOOK_SECRET), asy
     }
 })
 
+// --- Health Check Route ---
+app.get('/health', async (c) => {
+    const healthStatus = {
+        status: 'ok',
+        database: 'ok',
+        slack: 'ok',
+        timestamp: new Date().toISOString()
+    };
+    const errors: string[] = [];
+
+    try {
+        if (!mapper.isHealthy()) { //
+            throw new Error('Database health check failed');
+        }
+    } catch (error: any) {
+        healthStatus.database = 'error';
+        errors.push(error.message);
+    }
+
+    try {
+        const slackAuth = await slackClient.auth.test();
+        if (!slackAuth.ok) {
+            throw new Error(slackAuth.error || 'Slack authentication test failed');
+        }
+    } catch (error: any) {
+        healthStatus.slack = 'error';
+        errors.push(error.message);
+    }
+
+    if (errors.length > 0) {
+        healthStatus.status = 'error';
+        logger.error({ errors, healthStatus }, "Health check failed");
+        c.status(503); // Use 503 Service Unavailable for failing health checks
+    } else {
+        logger.info("Health check passed");
+    }
+
+    return c.json(healthStatus);
+});
+
 // --- Start Server ---
 serve({
     fetch: app.fetch,
